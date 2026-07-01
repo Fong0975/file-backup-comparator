@@ -1,0 +1,31 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.21"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - misspell
+  settings:
+    misspell:
+      locale: US
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - filecompare
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

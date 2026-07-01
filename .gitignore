@@ -1,0 +1,19 @@
+# Build output
+*.exe
+
+# Settings backup exports
+backup/
+
+# Go test artifacts
+*.test
+*.out
+
+# IDE and editor
+.vscode/
+.idea/
+*.code-workspace
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini

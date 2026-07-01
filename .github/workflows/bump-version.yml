@@ -1,0 +1,121 @@
+name: Bump Version
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Version bump type (patch, minor, or major)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      notes:
+        description: 'Optional release notes (appended after version line)'
+        required: false
+        type: string
+
+jobs:
+  bump-version:
+    name: Bump version
+    runs-on: ubuntu-latest
+    concurrency:
+      group: bump-version
+      cancel-in-progress: false
+    permissions:
+      contents: write
+
+    steps:
+      - name: Generate GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app_token.outputs.token }}
+          ref: main
+
+      - name: Bump version
+        id: version
+        run: |
+          BUMP_TYPE="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.bump_type || 'patch' }}"
+
+          MAJOR=$(jq '.FixedFileInfo.FileVersion.Major' versioninfo.json)
+          MINOR=$(jq '.FixedFileInfo.FileVersion.Minor' versioninfo.json)
+          PATCH=$(jq '.FixedFileInfo.FileVersion.Patch' versioninfo.json)
+          OLD_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+
+          if [ "$BUMP_TYPE" = "major" ]; then
+            MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0
+          elif [ "$BUMP_TYPE" = "minor" ]; then
+            MINOR=$((MINOR + 1)); PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          VER_STR="${MAJOR}.${MINOR}.${PATCH}.0"
+
+          jq --argjson maj "$MAJOR" --argjson min "$MINOR" --argjson pat "$PATCH" \
+             --arg ver "$VER_STR" \
+             '.FixedFileInfo.FileVersion.Major = $maj |
+              .FixedFileInfo.FileVersion.Minor = $min |
+              .FixedFileInfo.FileVersion.Patch = $pat |
+              .FixedFileInfo.FileVersion.Build = 0 |
+              .FixedFileInfo.ProductVersion.Major = $maj |
+              .FixedFileInfo.ProductVersion.Minor = $min |
+              .FixedFileInfo.ProductVersion.Patch = $pat |
+              .FixedFileInfo.ProductVersion.Build = 0 |
+              .StringFileInfo.FileVersion = $ver |
+              .StringFileInfo.ProductVersion = $ver' \
+             versioninfo.json > versioninfo.tmp && mv versioninfo.tmp versioninfo.json
+
+          echo "old_version=$OLD_VERSION" >> "$GITHUB_OUTPUT"
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build extra commit body
+        id: extra_body
+        env:
+          COMMITS_JSON: ${{ toJson(github.event.commits) }}
+          MANUAL_NOTES: ${{ github.event.inputs.notes }}
+        run: |
+          EXTRA=""
+          if [ "${{ github.event_name }}" = "push" ]; then
+            EXTRA=$(echo "$COMMITS_JSON" | jq -r '.[].message | split("\n")[0]' | sed 's/^/- /')
+          elif [ -n "$MANUAL_NOTES" ]; then
+            EXTRA="$MANUAL_NOTES"
+          fi
+          EOF_MARKER=$(dd if=/dev/urandom bs=15 count=1 2>/dev/null | base64)
+          echo "value<<${EOF_MARKER}" >> "$GITHUB_OUTPUT"
+          echo "${EXTRA}" >> "$GITHUB_OUTPUT"
+          echo "${EOF_MARKER}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit, push, and tag
+        env:
+          EXTRA_BODY: ${{ steps.extra_body.outputs.value }}
+        run: |
+          OLD="${{ steps.version.outputs.old_version }}"
+          NEW="${{ steps.version.outputs.new_version }}"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add versioninfo.json
+          BODY="- ${OLD} → ${NEW}"
+          if [ -n "$EXTRA_BODY" ]; then
+            BODY="${BODY}"$'\n'"${EXTRA_BODY}"
+          fi
+          git commit -m "chore: Bump version to v${NEW} [skip ci]" -m "${BODY}"
+          git pull --rebase
+          git push
+          git tag "v${NEW}"
+          git push origin "v${NEW}"
